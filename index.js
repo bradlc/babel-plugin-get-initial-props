@@ -3,39 +3,52 @@ module.exports = function(babel) {
 
   return {
     visitor: {
-      ClassMethod(path) {
-        if (path.node.key.name !== 'getInitialProps') return
+      ClassDeclaration(classPath) {
+        let getInitialProps
+        let loadingComponent
 
-        const program = path.findParent(node => node.isProgram())
+        classPath
+          .get('body')
+          .get('body')
+          .forEach(path => {
+            if (!path.node || !path.node.key) return
+            if (path.node.key.name === 'getInitialProps') {
+              getInitialProps = path
+            } else if (path.node.key.name === 'loading') {
+              loadingComponent = path
+            }
+          })
+
+        if (!getInitialProps) return
+
+        const program = classPath.findParent(node => node.isProgram())
         const loadableIdentifier = program.scope.generateUidIdentifier(
           'Loadable'
         )
 
-        const c = path.findParent(path => path.isClassDeclaration())
-        if (!c) return
-        const originalClassName = c.node.id.name
-        const classId = c.scope.generateUidIdentifier(originalClassName).name
-        c.node.id.name = classId
+        const originalClassName = classPath.node.id.name
+        const classId = classPath.scope.generateUidIdentifier(originalClassName)
+          .name
+        classPath.node.id.name = classId
 
         const obj = [
           t.objectProperty(
             t.identifier('loader'),
-            t.arrowFunctionExpression([], path.node.body)
+            t.arrowFunctionExpression([], getInitialProps.node.body)
           )
         ]
 
-        path.container.forEach((node, i) => {
-          if (node.type === 'ClassMethod' && node.key.name === 'loading') {
-            // loading component
-            const fn = path.getSibling(i)
-            const loading = t.arrowFunctionExpression(
-              fn.node.params,
-              fn.node.body
-            )
-            obj.push(t.objectProperty(t.identifier('loading'), loading))
-            fn.remove()
-          }
-        })
+        if (loadingComponent) {
+          const loading = t.arrowFunctionExpression(
+            loadingComponent.node.params,
+            loadingComponent.node.body
+          )
+          obj.push(t.objectProperty(t.identifier('loading'), loading))
+          loadingComponent.remove()
+        } else {
+          const loading = t.arrowFunctionExpression([], t.nullLiteral())
+          obj.push(t.objectProperty(t.identifier('loading'), loading))
+        }
 
         const attrs = [
           t.jSXSpreadAttribute(t.identifier('props')),
@@ -60,12 +73,12 @@ module.exports = function(babel) {
         const loadable = t.callExpression(loadableIdentifier, [
           t.objectExpression(obj)
         ])
-        c.insertAfter(
+        classPath.insertAfter(
           t.variableDeclaration('const', [
             t.variableDeclarator(t.identifier(originalClassName), loadable)
           ])
         )
-        path.remove()
+        getInitialProps.remove()
 
         // 'react-loadable' import
         program.unshiftContainer(
